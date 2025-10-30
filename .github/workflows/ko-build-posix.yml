@@ -34,7 +34,7 @@ jobs:
         run: |
           ko build ./cmd/tesseract/posix \
             --bare \
-            --platform=linux/amd64 \
+            --platform=linux/amd64,linux/arm64 \
             --tags latest,${{ github.sha }}
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/tesseract
