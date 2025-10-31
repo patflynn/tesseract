@@ -41,7 +41,7 @@ jobs:
           image_and_digest=$(ko build ./cmd/tesseract/posix \
             --bare \
             --platform=linux/amd64,linux/arm64 \
-            --tags latest,${{ github.sha }}
+            --tags latest,${{ github.sha }})
 
           # Extract image name (without digest)
           image=$(echo "${image_and_digest}" | cut -d'@' -f1)
