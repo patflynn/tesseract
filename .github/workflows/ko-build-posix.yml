@@ -5,11 +5,15 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-posix:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout code
@@ -31,15 +35,33 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push POSIX tesseract with ko
+        id: build
         run: |
-          ko build github.com/transparency-dev/tesseract/cmd/tesseract/posix \
+          # Build and capture the image reference with digest
+          image_and_digest=$(ko build github.com/transparency-dev/tesseract/cmd/tesseract/posix \
             --bare \
-            --platform=linux/amd64 \
-            --tags latest,${{ github.sha }}
+            --platform=linux/amd64,linux/arm64 \
+            --tags latest,${{ github.sha }})
+
+          # Extract image name (without digest)
+          image=$(echo "${image_and_digest}" | cut -d'@' -f1)
+
+          # Extract digest
+          digest=$(echo "${image_and_digest}" | cut -d'@' -f2)
+
+          # Output for next job
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+          # Log for visibility
+          echo "Image: ${image}"
+          echo "Digest: ${digest}"
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/tesseract
 
-      - name: Output image reference
-        run: |
-          echo "Image pushed to: ghcr.io/${{ github.repository_owner }}/tesseract/posix:latest"
-          echo "Image pushed to: ghcr.io/${{ github.repository_owner }}/tesseract/posix:${{ github.sha }}"
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ steps.build.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
