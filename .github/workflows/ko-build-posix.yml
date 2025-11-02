@@ -38,7 +38,7 @@ jobs:
         id: build
         run: |
           # Build and capture the image reference with digest
-          image_and_digest=$(ko build ./cmd/tesseract/posix \
+          image_and_digest=$(ko build github.com/transparency-dev/tesseract/cmd/tesseract/posix \
             --bare \
             --platform=linux/amd64,linux/arm64 \
             --tags latest,${{ github.sha }})
