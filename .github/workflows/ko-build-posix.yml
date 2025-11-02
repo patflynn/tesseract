@@ -32,7 +32,7 @@ jobs:
 
       - name: Build and push POSIX tesseract with ko
         run: |
-          ko build ./cmd/tesseract/posix \
+          ko build github.com/transparency-dev/tesseract/cmd/tesseract/posix \
             --bare \
             --platform=linux/amd64 \
             --tags latest,${{ github.sha }}
