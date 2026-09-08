@@ -74,13 +74,17 @@ func main() {
 	f := fsck.New(*origin, v, src, lsc.merkleLeafHasher(), fsck.Opts{N: *N})
 	eg := errgroup.Group{}
 	eg.Go(func() error {
-		defer lsc.Close()
+		// Signal to the issuer check that no more fingerprints are coming, and to the UI that
+		// there's nothing more to show.
 		defer cancel()
+		defer lsc.Close()
 		return f.Check(ctx)
 
 	})
 	eg.Go(func() error {
-		return lsc.checkIssuersTask(ctx, src.ReadIssuer, *N)
+		// This runs on a context which survives the cancellation above: the issuer check may
+		// still have buffered fingerprints to look up once the tree check has completed.
+		return lsc.checkIssuersTask(context.WithoutCancel(ctx), src.ReadIssuer, *N)
 	})
 
 	if *ui {
@@ -90,14 +94,18 @@ func main() {
 		// User may have exited the UI, cancel the context to signal to everything else.
 		cancel()
 	} else {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Second):
-				slog.DebugContext(ctx, "Ranges", slog.Any("status", f.Status()))
+		// Log progress in the background so that we always reach the eg.Wait below, and exit
+		// with a status which reflects the outcome of the checks.
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+					slog.DebugContext(ctx, "Ranges", slog.Any("status", f.Status()))
+				}
 			}
-		}
+		}()
 	}
 
 	if err := eg.Wait(); err != nil {
