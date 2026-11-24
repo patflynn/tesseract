@@ -13,6 +13,15 @@ terraform {
   backend "gcs" {}
 }
 
+locals {
+  mig_logs = {
+    for name, v in var.logs : name => v if v.backend_type != "cloudrun"
+  }
+  cloudrun_logs = {
+    for name, v in var.logs : name => v if v.backend_type != "mig"
+  }
+}
+
 module "gce-lb-http" {
   source                = "terraform-google-modules/lb-http/google"
   version               = "~> 12.0"
@@ -34,7 +43,7 @@ module "gce-lb-http" {
   // Use the Cloud Armor policy, if it's enabled.
   security_policy = one(module.cloud_armor[*].policy.self_link)
 
-  backends = { for name, v in var.logs:
+  backends = { for name, v in local.mig_logs :
     "${name}-backend" => {
       protocol    = "HTTP"
       port        = 80
@@ -75,6 +84,57 @@ module "gce-lb-http" {
 
     }
   }
+}
+
+resource "google_compute_region_network_endpoint_group" "cloudrun_negs" {
+  for_each = local.cloudrun_logs
+
+  name                  = "${each.key}-cloudrun-neg"
+  project               = var.project_id
+  region                = coalesce(each.value.cloudrun_region, each.value.region)
+  network_endpoint_type = "SERVERLESS"
+
+  cloud_run {
+    service = coalesce(each.value.cloudrun_service_name, each.key)
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "google_compute_backend_service" "cloudrun_backends" {
+  for_each = local.cloudrun_logs
+
+  name                  = "tesseract-lb-http-backend-${each.key}-cloudrun-backend"
+  project               = var.project_id
+  protocol              = "HTTP"
+  timeout_sec           = 10
+  load_balancing_scheme = "EXTERNAL"
+  security_policy       = one(module.cloud_armor[*].policy.self_link)
+
+  log_config {
+    enable      = true
+    sample_rate = 1.0
+  }
+
+  backend {
+    group = google_compute_region_network_endpoint_group.cloudrun_negs[each.key].id
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "cloudrun_public_invoker" {
+  for_each = local.cloudrun_logs
+
+  project  = var.project_id
+  location = coalesce(each.value.cloudrun_region, each.value.region)
+  name     = coalesce(each.value.cloudrun_service_name, each.key)
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 resource "google_compute_url_map" "url_map" {
@@ -120,7 +180,11 @@ resource "google_compute_url_map" "url_map" {
           "/ct/v1/add-chain",
           "/ct/v1/get-roots",
         ]
-        service = module.gce-lb-http.backend_services["${log.key}-backend"].self_link
+        service = (
+          log.value.backend_type == "cloudrun" || (log.value.backend_type == "dual" && log.value.route_to_cloudrun)
+          ? google_compute_backend_service.cloudrun_backends[log.key].self_link
+          : module.gce-lb-http.backend_services["${log.key}-backend"].self_link
+        )
       }
     }
   }
@@ -141,11 +205,14 @@ module "cloud_armor" {
 }
 
 resource "random_id" "suffix" {
-  for_each = var.logs
+  for_each    = var.logs
   byte_length = 4
 
   keepers = {
-    logs = jsonencode(each.value)
+    logs = jsonencode({
+      region                 = each.value.region
+      submission_host_suffix = each.value.submission_host_suffix
+    })
   }
 }
 
